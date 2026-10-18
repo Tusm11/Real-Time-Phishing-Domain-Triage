@@ -34,3 +34,8 @@ data/
 # Excluded from the public repo
 docs/
 loadtest/
+
+# HuggingFace / model caches (dev bind-mount artefacts)
+.cache/
+services/*/.cache/
+**/.cache/
