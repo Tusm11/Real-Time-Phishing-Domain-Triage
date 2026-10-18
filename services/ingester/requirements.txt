@@ -1,0 +1,4 @@
+redis==5.0.8
+websockets==12.0
+aiohttp==3.9.5
+prometheus-client==0.20.0

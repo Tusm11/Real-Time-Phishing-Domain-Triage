@@ -1,0 +1,74 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Certs ingested (per sec, 1m)",
+      "gridPos": {"x": 0, "y": 0, "w": 6, "h": 4},
+      "datasource": {"type": "prometheus", "uid": "prom"},
+      "targets": [{"expr": "rate(certs_ingested_total[1m])", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "ops"}}
+    },
+    {
+      "type": "stat",
+      "title": "Raw queue depth",
+      "gridPos": {"x": 6, "y": 0, "w": 6, "h": 4},
+      "datasource": {"type": "prometheus", "uid": "prom"},
+      "targets": [{"expr": "raw_queue_depth", "refId": "A"}],
+      "fieldConfig": {"defaults": {"thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 500}, {"color": "red", "value": 1000}]}}}
+    },
+    {
+      "type": "stat",
+      "title": "Triage queue depth",
+      "gridPos": {"x": 12, "y": 0, "w": 6, "h": 4},
+      "datasource": {"type": "prometheus", "uid": "prom"},
+      "targets": [{"expr": "triage_queue_depth", "refId": "A"}],
+      "fieldConfig": {"defaults": {"thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 100}, {"color": "red", "value": 500}]}}}
+    },
+    {
+      "type": "stat",
+      "title": "WS reconnects (total)",
+      "gridPos": {"x": 18, "y": 0, "w": 6, "h": 4},
+      "datasource": {"type": "prometheus", "uid": "prom"},
+      "targets": [{"expr": "ws_reconnects_total", "refId": "A"}]
+    },
+    {
+      "type": "timeseries",
+      "title": "Ingest vs filter passes vs LLM calls",
+      "gridPos": {"x": 0, "y": 4, "w": 24, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "prom"},
+      "targets": [
+        {"expr": "rate(certs_ingested_total[1m])", "legendFormat": "ingested", "refId": "A"},
+        {"expr": "sum(rate(filter_passed_total[1m])) by (stage)", "legendFormat": "pass {{stage}}", "refId": "B"},
+        {"expr": "sum(rate(llm_requests_total[1m]))", "legendFormat": "llm calls", "refId": "C"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "ops"}}
+    },
+    {
+      "type": "timeseries",
+      "title": "Drops by stage/reason",
+      "gridPos": {"x": 0, "y": 12, "w": 24, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "prom"},
+      "targets": [
+        {"expr": "sum(rate(filter_dropped_total[1m])) by (stage, reason)", "legendFormat": "{{stage}} / {{reason}}", "refId": "A"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "ops"}}
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "tags": ["phishing", "pipeline"],
+  "templating": {"list": []},
+  "time": {"from": "now-30m", "to": "now"},
+  "timepicker": {},
+  "timezone": "",
+  "title": "Pipeline Health",
+  "uid": "pipeline-health",
+  "version": 1
+}

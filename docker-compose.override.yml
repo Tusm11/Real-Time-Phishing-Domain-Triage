@@ -1,0 +1,52 @@
+# Dev-only overrides. Compose auto-merges this on top of docker-compose.yml.
+# Keep bind-mounts, exposed debug ports, and lower resource floors here.
+
+services:
+  ingester:
+    volumes:
+      - ./services/ingester:/app
+    environment:
+      LOG_LEVEL: DEBUG
+    ports:
+      - "9101:9101"   # /metrics exposed to host for curl in dev
+
+  filter:
+    volumes:
+      - ./services/filter:/app
+    environment:
+      LOG_LEVEL: DEBUG
+    ports:
+      - "9102:9102"
+
+  llm-worker-1:
+    volumes:
+      - ./services/llm-worker:/app
+    environment:
+      LOG_LEVEL: DEBUG
+    ports:
+      - "9103:9103"
+
+  llm-worker-2:
+    volumes:
+      - ./services/llm-worker:/app
+
+  llm-worker-3:
+    volumes:
+      - ./services/llm-worker:/app
+
+  api:
+    volumes:
+      - ./services/api:/app
+    environment:
+      LOG_LEVEL: DEBUG
+    ports:
+      - "9104:9104"
+
+  dashboard:
+    # In dev, run Vite dev server with HMR instead of built nginx bundle.
+    command: ["npm", "run", "dev", "--", "--host", "0.0.0.0", "--port", "5173"]
+    volumes:
+      - ./services/dashboard:/app
+      - /app/node_modules
+    ports:
+      - "5173:5173"

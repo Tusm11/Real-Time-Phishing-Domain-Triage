@@ -1,0 +1,321 @@
+# Real-Time Phishing Domain Triage
+# AI + DevOps pipeline: Certstream -> filter -> Groq LLM tier -> Postgres -> dashboard
+# Observability: Prometheus + Grafana
+
+name: phishing-triage
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-restart: &default-restart
+  restart: unless-stopped
+
+networks:
+  phishnet:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  grafana_data:
+  prometheus_data:
+
+services:
+  # ---------------------------------------------------------------------------
+  # Infrastructure
+  # ---------------------------------------------------------------------------
+
+  postgres:
+    image: postgres:16
+    container_name: phish-postgres
+    <<: *default-restart
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-phish}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-phish}
+      POSTGRES_DB: ${POSTGRES_DB:-phish}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./services/api/sql/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-phish} -d ${POSTGRES_DB:-phish}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks: [phishnet]
+    logging: *default-logging
+
+  redis:
+    image: redis:7
+    container_name: phish-redis
+    <<: *default-restart
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "512mb", "--maxmemory-policy", "allkeys-lru"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks: [phishnet]
+    logging: *default-logging
+
+  haproxy:
+    image: haproxy:latest
+    container_name: phish-haproxy
+    <<: *default-restart
+    volumes:
+      - ./infra/haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    ports:
+      - "8080:8080"   # frontend -> llm-worker pool
+      - "8081:8081"   # stats page
+    depends_on:
+      - llm-worker-1
+      - llm-worker-2
+      - llm-worker-3
+    healthcheck:
+      test: ["CMD", "sh", "-c", "echo 'show info' | nc -w1 127.0.0.1 9999 || exit 0"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks: [phishnet]
+    logging: *default-logging
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: phish-prometheus
+    <<: *default-restart
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.enable-lifecycle
+      - --storage.tsdb.retention.time=15d
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./infra/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9090/-/healthy"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks: [phishnet]
+    logging: *default-logging
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: phish-grafana
+    <<: *default-restart
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "3000:3000"
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://localhost:3000/api/health || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks: [phishnet]
+    logging: *default-logging
+
+  # Self-hosted Certstream. Reads directly from the public CT log operators
+  # (Google Argon/Xenon, Cloudflare Nimbus, Let's Encrypt Oak, Sectigo, DigiCert)
+  # and exposes a WebSocket at :4000. Replaces the flaky certstream.calidog.io.
+  certstream-server:
+    image: ghcr.io/d-rickyy-b/certstream-server-go:latest
+    container_name: phish-certstream-server
+    <<: *default-restart
+    ports:
+      - "4000:8080"
+    # No healthcheck: image is distroless, no wget/curl/sh to probe with.
+    networks: [phishnet]
+    logging: *default-logging
+
+  # ---------------------------------------------------------------------------
+  # Own services
+  # ---------------------------------------------------------------------------
+
+  ingester:
+    build: ./services/ingester
+    container_name: phish-ingester
+    <<: *default-restart
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      RAW_QUEUE: raw_certs
+      # Default now points at the self-hosted certstream-server service.
+      # Set CERTSTREAM_URL in .env to override (e.g. for a public mirror).
+      CERTSTREAM_URL: ${CERTSTREAM_URL:-ws://certstream-server:8080/full-stream}
+      METRICS_PORT: "9101"
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    depends_on:
+      redis:
+        condition: service_healthy
+      certstream-server:
+        condition: service_started
+    expose:
+      - "9101"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9101/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks: [phishnet]
+    logging: *default-logging
+
+  filter:
+    build: ./services/filter
+    container_name: phish-filter
+    <<: *default-restart
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      RAW_QUEUE: raw_certs
+      TRIAGE_QUEUE: triage_candidates
+      BRAND_WATCHLIST: ${BRAND_WATCHLIST:-sbi,hdfc,icici,axis,kotak,paytm,phonepe,zerodha,groww}
+      STAGE_B_THRESHOLD: "0.6"
+      STAGE_C_THRESHOLD: "0.3"
+      EMBEDDING_MODEL: sentence-transformers/all-MiniLM-L6-v2
+      METRICS_PORT: "9102"
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    depends_on:
+      redis:
+        condition: service_healthy
+      ingester:
+        condition: service_healthy
+    expose:
+      - "9102"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9102/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks: [phishnet]
+    logging: *default-logging
+
+  # LLM worker pool — 3 replicas behind HAProxy.
+  # Named explicitly (not "deploy: replicas") so compose health checks
+  # and depends_on work predictably without swarm mode.
+  llm-worker-1: &llm-worker
+    build: ./services/llm-worker
+    container_name: phish-llm-worker-1
+    <<: *default-restart
+    environment:
+      WORKER_ID: "1"
+      REDIS_URL: redis://redis:6379/0
+      TRIAGE_QUEUE: triage_candidates
+      POSTGRES_DSN: postgresql://${POSTGRES_USER:-phish}:${POSTGRES_PASSWORD:-phish}@postgres:5432/${POSTGRES_DB:-phish}
+      GROQ_API_KEY: ${GROQ_API_KEY}
+      GROQ_MODEL: ${GROQ_MODEL:-llama-3.1-8b-instant}
+      GROQ_TIMEOUT_SECONDS: "10"
+      GROQ_MAX_RETRIES: "3"
+      BREAKER_FAILURE_THRESHOLD: "5"
+      BREAKER_RESET_SECONDS: "30"
+      HEALTH_PORT: "8000"
+      METRICS_PORT: "9103"
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    expose:
+      - "8000"
+      - "9103"
+    mem_limit: 512m
+    cpus: 0.5
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks: [phishnet]
+    logging: *default-logging
+
+  llm-worker-2:
+    <<: *llm-worker
+    container_name: phish-llm-worker-2
+    environment:
+      WORKER_ID: "2"
+      REDIS_URL: redis://redis:6379/0
+      TRIAGE_QUEUE: triage_candidates
+      POSTGRES_DSN: postgresql://${POSTGRES_USER:-phish}:${POSTGRES_PASSWORD:-phish}@postgres:5432/${POSTGRES_DB:-phish}
+      GROQ_API_KEY: ${GROQ_API_KEY}
+      GROQ_MODEL: ${GROQ_MODEL:-llama-3.1-8b-instant}
+      GROQ_TIMEOUT_SECONDS: "10"
+      GROQ_MAX_RETRIES: "3"
+      BREAKER_FAILURE_THRESHOLD: "5"
+      BREAKER_RESET_SECONDS: "30"
+      HEALTH_PORT: "8000"
+      METRICS_PORT: "9103"
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+
+  llm-worker-3:
+    <<: *llm-worker
+    container_name: phish-llm-worker-3
+    environment:
+      WORKER_ID: "3"
+      REDIS_URL: redis://redis:6379/0
+      TRIAGE_QUEUE: triage_candidates
+      POSTGRES_DSN: postgresql://${POSTGRES_USER:-phish}:${POSTGRES_PASSWORD:-phish}@postgres:5432/${POSTGRES_DB:-phish}
+      GROQ_API_KEY: ${GROQ_API_KEY}
+      GROQ_MODEL: ${GROQ_MODEL:-llama-3.1-8b-instant}
+      GROQ_TIMEOUT_SECONDS: "10"
+      GROQ_MAX_RETRIES: "3"
+      BREAKER_FAILURE_THRESHOLD: "5"
+      BREAKER_RESET_SECONDS: "30"
+      HEALTH_PORT: "8000"
+      METRICS_PORT: "9103"
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+
+  api:
+    build: ./services/api
+    container_name: phish-api
+    <<: *default-restart
+    environment:
+      POSTGRES_DSN: postgresql://${POSTGRES_USER:-phish}:${POSTGRES_PASSWORD:-phish}@postgres:5432/${POSTGRES_DB:-phish}
+      REDIS_URL: redis://redis:6379/0
+      API_PORT: "8000"
+      METRICS_PORT: "9104"
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    expose:
+      - "9104"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks: [phishnet]
+    logging: *default-logging
+
+  dashboard:
+    build: ./services/dashboard
+    container_name: phish-dashboard
+    <<: *default-restart
+    environment:
+      VITE_API_URL: ${VITE_API_URL:-http://localhost:8000}
+    ports:
+      - "5173:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    networks: [phishnet]
+    logging: *default-logging

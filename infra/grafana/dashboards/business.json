@@ -1,0 +1,48 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Verdicts per minute by class",
+      "gridPos": {"x": 0, "y": 0, "w": 12, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "prom"},
+      "targets": [
+        {"expr": "sum(rate(verdict_total[1m])) by (verdict) * 60", "legendFormat": "{{verdict}}", "refId": "A"}
+      ]
+    },
+    {
+      "type": "piechart",
+      "title": "LLM vs fallback share (last 1h)",
+      "gridPos": {"x": 12, "y": 0, "w": 12, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "prom"},
+      "targets": [
+        {"expr": "sum(increase(verdict_total[1h])) by (source)", "legendFormat": "{{source}}", "refId": "A"}
+      ],
+      "options": {"legend": {"displayMode": "list", "placement": "right"}}
+    },
+    {
+      "type": "bargauge",
+      "title": "Flagged brands (last 1h, phishing only)",
+      "gridPos": {"x": 0, "y": 8, "w": 24, "h": 10},
+      "datasource": {"type": "prometheus", "uid": "prom"},
+      "targets": [
+        {"expr": "sum(increase(verdict_total{verdict=\"phishing\"}[1h])) by (verdict)", "legendFormat": "phishing", "refId": "A"}
+      ],
+      "options": {"orientation": "horizontal", "displayMode": "lcd"}
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["phishing", "business"],
+  "templating": {"list": []},
+  "time": {"from": "now-6h", "to": "now"},
+  "timezone": "",
+  "title": "Business",
+  "uid": "business",
+  "version": 1
+}

@@ -1,0 +1,70 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Requests per second by status",
+      "gridPos": {"x": 0, "y": 0, "w": 12, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "prom"},
+      "targets": [
+        {"expr": "sum(rate(llm_requests_total[1m])) by (status)", "legendFormat": "{{status}}", "refId": "A"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "ops"}}
+    },
+    {
+      "type": "timeseries",
+      "title": "Latency p50 / p95 / p99",
+      "gridPos": {"x": 12, "y": 0, "w": 12, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "prom"},
+      "targets": [
+        {"expr": "histogram_quantile(0.50, sum(rate(llm_latency_seconds_bucket[1m])) by (le))", "legendFormat": "p50", "refId": "A"},
+        {"expr": "histogram_quantile(0.95, sum(rate(llm_latency_seconds_bucket[1m])) by (le))", "legendFormat": "p95", "refId": "B"},
+        {"expr": "histogram_quantile(0.99, sum(rate(llm_latency_seconds_bucket[1m])) by (le))", "legendFormat": "p99", "refId": "C"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "s"}}
+    },
+    {
+      "type": "timeseries",
+      "title": "Tokens per minute",
+      "gridPos": {"x": 0, "y": 8, "w": 12, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "prom"},
+      "targets": [
+        {"expr": "sum(rate(llm_tokens_total[1m])) by (direction) * 60", "legendFormat": "{{direction}}", "refId": "A"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "short"}}
+    },
+    {
+      "type": "timeseries",
+      "title": "Groq remaining quota",
+      "gridPos": {"x": 12, "y": 8, "w": 12, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "prom"},
+      "targets": [
+        {"expr": "min(groq_rate_remaining) by (type)", "legendFormat": "{{type}}", "refId": "A"}
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Breaker state (per worker, 0=closed 1=half 2=open)",
+      "gridPos": {"x": 0, "y": 16, "w": 24, "h": 4},
+      "datasource": {"type": "prometheus", "uid": "prom"},
+      "targets": [
+        {"expr": "breaker_state", "legendFormat": "worker {{worker}}", "refId": "A"}
+      ],
+      "fieldConfig": {"defaults": {"thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 1}, {"color": "red", "value": 2}]}, "mappings": [{"type": "value", "options": {"0": {"text": "closed"}, "1": {"text": "half-open"}, "2": {"text": "open"}}}]}}
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "tags": ["phishing", "llm"],
+  "templating": {"list": []},
+  "time": {"from": "now-30m", "to": "now"},
+  "timezone": "",
+  "title": "LLM Tier",
+  "uid": "llm-tier",
+  "version": 1
+}

@@ -1,0 +1,9 @@
+# CPU-only torch to avoid ~2GB of CUDA libraries we don't use (MiniLM is tiny
+# and runs comfortably on CPU; inference is milliseconds per domain).
+--extra-index-url https://download.pytorch.org/whl/cpu
+redis==5.0.8
+aiohttp==3.9.5
+prometheus-client==0.20.0
+sentence-transformers==3.0.1
+numpy==1.26.4
+torch==2.2.2+cpu
